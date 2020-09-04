@@ -1,0 +1,115 @@
+// Load Sentinel1 C band SAR Ground Range collection (log scale, VV, descending)
+var collectionVV = ee.ImageCollection ('COPERNICUS/S1_GRD')
+.filter(ee.Filter.eq('instrumentMode', 'IW'))
+.filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
+.filter(ee.Filter.eq('orbitProperties_pass', 'DESCENDING'))
+.filterMetadata('resolution_meters', 'equals' , 10)
+.filterBounds(aoi)
+.select('VV');
+print(collectionVV , 'Collection VV');
+
+// Load Sentinel1 C band SAR Ground Range collection (log scale, VH, descending)
+var collectionVH = ee.ImageCollection ('COPERNICUS/S1_GRD')
+.filter(ee.Filter.eq('instrumentMode', 'IW'))
+.filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VH'))
+.filter(ee.Filter.eq('orbitProperties_pass', 'DESCENDING'))
+.filterMetadata('resolution_meters', 'equals' , 10)
+.filterBounds(aoi)
+.select('VH');
+print(collectionVV , 'Collection VH');
+
+//Filter by date
+var Mar_before_VV = collectionVV.filterDate('2020-01-10','2020-01-20').mosaic();
+var Mar_dur_after_VV = collectionVV.filterDate('2020-01-22','2020-02-01').mosaic();
+
+var Mar_before_VH = collectionVH.filterDate('2020-01-10','2020-01-20').mosaic();
+var Mar_dur_after_VH = collectionVH.filterDate('2020-01-22','2020-02-01').mosaic();
+
+// Display map
+Map.centerObject(aoi,7);
+Map.addLayer(Mar_before_VV.clip(aoi),{min:-15,max:0},'beforeVV',0);
+Map.addLayer(Mar_dur_after_VV.clip(aoi),{min:-15,max:0},'dur/afterVV',0);
+
+Map.addLayer(Mar_before_VH.clip(aoi),{min:-27,max:0},'before VH',0);
+Map.addLayer(Mar_dur_after_VH.clip(aoi),{min:-27,max:0},'dur/after VH',0);
+
+// Apply filter to reduce speckle
+var SMOOTHING_RADIUS = 50;
+var Mar_before_VV_filtered = Mar_before_VV.focal_mean(SMOOTHING_RADIUS, 'circle', 'meters');
+var Mar_before_VH_filtered = Mar_before_VH.focal_mean(SMOOTHING_RADIUS, 'circle', 'meters');
+var Mar_dur_after_VV_filtered = Mar_dur_after_VV.focal_mean(SMOOTHING_RADIUS, 'circle','meters');
+var Mar_dur_after_VH_filtered = Mar_dur_after_VH.focal_mean(SMOOTHING_RADIUS, 'circle','meters');
+
+//Display filtered images
+Map.addLayer(Mar_before_VV_filtered, {min:-15,max:0}, 'before VV Filtered',0);
+Map.addLayer(Mar_before_VH_filtered, {min:-27,max:0}, 'before VH Filtered',0);
+Map.addLayer(Mar_dur_after_VV_filtered, {min:-15,max:0}, 'dur/after VV Filtered',0);
+Map.addLayer(Mar_dur_after_VH_filtered, {min:-27,max:0}, 'dur/after VH Filtered',0);
+
+
+//Calculate the difference between before and after
+var diffMarVH= Mar_before_VH_filtered.subtract(Mar_dur_after_VH_filtered);
+var diffMarVV= Mar_before_VV_filtered.subtract(Mar_dur_after_VV_filtered);
+
+// Display the difference images
+Map.addLayer( diffMarVH.clip(aoi), {min:-9,max:9}, 'Difference VH Marsabit', 0);
+Map.addLayer( diffMarVV.clip(aoi), {min:-9,max:9}, 'Difference VV Marsabit', 0);
+
+//Calculate histograms for the image
+print(ui.Chart.image.histogram ({image:diffMarVH, region:aoi , scale:300}));
+
+// Combine the mean and standard deviation reducers.
+var reducers = ee.Reducer.mean().combine({
+reducer2:ee.Reducer.stdDev(),
+sharedInputs: true
+});
+
+//Calculate the mean and standard deviation for the difference image
+var stats_Mar = diffMarVH.reduceRegion({
+reducer: reducers,
+geometry:aoi,
+scale: 30,
+maxPixels: 1e9,
+});
+
+//Print the mean and stdv for the difference image
+print('stats:', stats_Mar)
+
+//Apply Thresholds based on (< stdvx1.5) to create a vegetation regrowth mask
+var DIFF_UPPER_THRESHOLD_Mar = 2.24;
+var diffMarVH_thresholded = diffMarVH.gt(DIFF_UPPER_THRESHOLD_Mar);
+
+//Display Masks
+Map.addLayer(diffMarVH_thresholded.updateMask(diffMarVH_thresholded).clip(aoi),{palette:"FF0000"},'Vegetation Loss Mar',1);
+
+//Map.addLayer(fao);
+//Map.addLayer(teast);
+//Map.addLayer(aoi);
+
+//Export.image.toDrive({image:diffMarVH_thresholded.updateMask(diffMarVH_thresholded).clip(aoi),
+//                     description:"Baringo_vegetation_loss",
+//                     //folder:"/gee_files",
+//                     region:aoi.geometry().bounds(),
+//                     scale:30,
+//                     maxPixels:1e13})
+
+//Export.image.toDrive({image:Mar_before_VH_filtered.clip(aoi),
+//                     description:"Baringo_before",
+//                     //folder:"/gee_files",
+//                     region:aoi.geometry().bounds(),
+//                     scale:30,
+//                     maxPixels:1e13})
+
+//Export.image.toDrive({image:Mar_dur_after_VH_filtered.clip(aoi),
+//                     description:"Baringo_after-during",
+//                     //folder:"/gee_files",
+//                     region:aoi.geometry().bounds(),
+//                     scale:30,
+//                     maxPixels:1e13})
+
+Export.image.toDrive({image:diffMarVH.clip(aoi),
+                     description:"Baringo_difference",
+                     //folder:"/gee_files",
+                     region:aoi.geometry().bounds(),
+                     scale:30,
+                     maxPixels:1e13})
